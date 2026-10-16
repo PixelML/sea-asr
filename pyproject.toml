@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sea_asr"
+version = "0.1.0"
+description = "CTC speech recognition (Indonesian, Tagalog) on the EmbeddingGemma 2 audio tower"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "torch==2.14.1",
+    "transformers==5.19.0",
+    "huggingface_hub==2.1.1",
+    "safetensors==0.8.0",
+    "numpy==2.5.3",
+    "soundfile==0.13.1",
+    "soxr==1.0.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["sea_asr"]
+package-dir = { "sea_asr" = "." }
