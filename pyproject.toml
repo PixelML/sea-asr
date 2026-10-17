@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sea_asr"
-version = "0.1.0"
+version = "0.2.0"
 description = "CTC speech recognition (Indonesian, Tagalog) on the EmbeddingGemma 2 audio tower"
 readme = "README.md"
 license = "Apache-2.0"
@@ -14,13 +14,21 @@ dependencies = [
     "transformers==5.19.0",
     "huggingface_hub==2.1.1",
     "safetensors==0.8.0",
-    "numpy==2.5.3",
+    "numpy>=1.26,<3",  # range, not a pin: pyctcdecode 0.5.0 ([lm]) requires numpy<2; greedy installs get 2.x
     "soundfile==0.13.1",
     "soxr==1.0.0",
 ]
 
 [project.optional-dependencies]
 test = ["pytest"]
+# KenLM beam search. kenlm has no maintained PyPI release: pinned to the kpu/kenlm commit by full SHA.
+lm = [
+    "pyctcdecode==0.5.0",
+    "kenlm @ https://github.com/kpu/kenlm/archive/4cb443e60b7bf2c0ddf3c745378f76cb59e254e5.zip",
+]
+# N-best rescoring with a causal LM (sea_asr.rescore, off by default): KenLM extra only; transformers is already a
+# base dependency. The LM (Sailor2-1B, Apache-2.0) downloads from the Hub at its pinned commit.
+rescore = ["sea_asr[lm]"]
 
 [tool.setuptools]
 packages = ["sea_asr"]

@@ -42,6 +42,39 @@ konvensional tetapi ada sedikit
 perbedaan segera setelah
 ```
 
+### With a language model (optional)
+
+```bash
+pip install "sea_asr[lm] @ git+https://github.com/PixelML/sea-asr@v0.2.0"   # adds pyctcdecode 0.5.0 + kenlm (pinned commit)
+```
+
+```python
+asr = SeaASR.from_pretrained("PixelML/sea-asr-id", lm="path/to/lm")       # or lm="<hf-repo>" with an lm/ folder
+asr = SeaASR.from_pretrained("PixelML/sea-asr-id", lm="path/to/lm", alpha=0.4, beta=1.0, beam=32, lm_workers=8)
+```
+
+```bash
+python -m sea_asr --model PixelML/sea-asr-id --lm path/to/lm clip.flac --srt out/
+```
+
+The LM directory holds a KenLM binary (`*.bin`, or `*.arpa`), `unigrams.txt`, and `lm_config.json` with the tuned
+`{"alpha": …, "beta": …}`; arguments override the file. Greedy decoding stays the default. The beam search runs in
+Python on the CPU; `lm_workers` > 1 decodes in a process pool. Measured on FLEURS-id test (GB10, 12 workers, beam 32):
+38x real time with the LM, 49x greedy.
+
+### Rescoring (optional, off by default)
+
+```bash
+pip install "sea_asr[rescore] @ git+https://github.com/PixelML/sea-asr@v0.2.0"
+```
+
+```python
+asr = SeaASR.from_pretrained("PixelML/sea-asr-id", lm="PixelML/sea-asr-id", rescore=True)
+```
+
+A second pass reranks the LM beam search's 32 best hypotheses with a causal LM, by default Sailor2-1B pinned to
+a commit (about 2 GB of GPU memory in bf16). `rescore=True` needs `lm=`.
+
 Cues have at most 2 lines of 32 characters and last at most 6 s. Inputs longer than 30 s are cut at quiet points
 and the timestamps stay on the original timeline. Input: a file path, a float32 16 kHz mono array, or an
 `(array, sample_rate)` tuple (resampled with soxr). On CUDA the model runs under bf16 autocast; on CPU in float32.
@@ -55,7 +88,7 @@ python -m sea_asr.convert runs/my-run/best out/my-run      # training checkpoint
 ## Tests
 
 ```bash
-pytest tests/test_decode.py                                 # CPU unit tests
+pytest tests/test_decode.py tests/test_lm.py tests/test_rescore.py   # CPU unit tests (test_lm/test_rescore need sea_asr[lm])
 ```
 
 ## Credits
@@ -64,6 +97,8 @@ pytest tests/test_decode.py                                 # CPU unit tests
 - Encoder implementation: Hugging Face, transformers ([v5.19.0](https://github.com/huggingface/transformers/tree/v5.19.0))
 - Data: YODAS (ESPnet/CMU, [52c5a1b9](https://huggingface.co/datasets/espnet/yodas/tree/52c5a1b9730a136bfd7c4513d4962c70d4e50530)); FLEURS (Google, [70bb2e84](https://huggingface.co/datasets/google/fleurs/tree/70bb2e84b976b7e960aa89f1c648e09c59f894dd)); CC-BY YouTube creators listed in each model's ATTRIBUTION
 - Teachers: Qwen3-ASR-1.7B (Alibaba Qwen, [7278e1e7](https://huggingface.co/Qwen/Qwen3-ASR-1.7B/tree/7278e1e70fe206f11671096ffdd38061171dd6e5)); Whisper large-v3 (OpenAI, [openai/whisper](https://github.com/openai/whisper)) as [Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3/tree/edaa852ec7e145841d8ffdb056a99866b5f0a478) (`edaa852e`) via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 1.2.1 (SYSTRAN)
+- LM decoding (optional extra): KenLM by Kenneth Heafield ([kpu/kenlm @ 4cb443e6](https://github.com/kpu/kenlm/tree/4cb443e60b7bf2c0ddf3c745378f76cb59e254e5)); pyctcdecode by Kensho Technologies ([kensho-technologies/pyctcdecode](https://github.com/kensho-technologies/pyctcdecode) 0.5.0)
+- Rescoring LM (optional): Sailor2-1B, Sea AI Lab ([sail/Sailor2-1B @ 75c2856f](https://huggingface.co/sail/Sailor2-1B/tree/75c2856ffc7e6a6e64127f40c5f54a953deb682e), Apache-2.0)
 - Test sets: FLEURS test (Google, same revision)
 - Recipe: Quan Nguyen ([@qnguyen3](https://github.com/qnguyen3)), QUAN-Transcribe — https://github.com/qnguyen3/QUAN-Transcribe ([4f45e02](https://github.com/qnguyen3/QUAN-Transcribe/tree/4f45e02))
 

@@ -56,3 +56,14 @@ files only. Where the spec was silent or ambiguous, the most literal reading was
 ## Audio input
 
 18. Multichannel files are averaged to mono. A bare array is assumed to be 16 kHz; pass `(array, sr)` otherwise.
+
+## LM decoding (v0.2, not in the spec)
+
+19. `sea_asr/lm.py` is written from the public pyctcdecode 0.5.0 and kenlm APIs only. Labels: blank `""`, unk `"⁇"`,
+    then the sentencepiece piece of each Gemma id, so pyctcdecode runs in BPE mode. unk stays a word-internal `⁇`
+    (as in `scripts/eval_lm.py`); `<unk>` would map to pyctcdecode's `▁⁇▁`, whose trailing `▁` sets a
+    `force_next_break` flag shared by all beams in a frame and splits words in other beams. `⁇` is removed from the
+    output and its neighbours join, as in greedy decoding.
+20. Log-probs are `log_softmax` in float32 of the (autocast) logits, computed per piece row so a 600 s batch never
+    holds the full [B, T, 34k] float32 tensor on the host.
+21. Word timestamps with the LM come from pyctcdecode's word frames `[start, end)` × 40 ms (+ piece offset).

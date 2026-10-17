@@ -6,6 +6,8 @@
     text = asr.transcribe("clip.flac")
     out = asr.transcribe("talk.flac", return_words=True)
     print(to_srt(out["words"]))
+
+    asr = SeaASR.from_pretrained("path/or/hf-repo", lm="path/to/lm-dir")   # KenLM beam search (sea_asr[lm])
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from pathlib import Path
 from .decode import to_srt, to_vtt
 
 __all__ = ["SeaASR", "to_srt", "to_vtt"]
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def _resolve_dir(path_or_repo: str, revision: str | None) -> Path:
@@ -30,15 +32,35 @@ def _resolve_dir(path_or_repo: str, revision: str | None) -> Path:
                                   allow_patterns=["config.json", "units.json", "model.safetensors"]))
 
 
+def _resolve_lm_dir(lm: str, revision: str | None) -> Path:
+    """A local LM directory, or a Hugging Face repo id whose LM files sit in its lm/ folder."""
+    p = Path(lm)
+    if p.is_dir():
+        return p
+    from huggingface_hub import snapshot_download
+
+    return Path(snapshot_download(lm, revision=revision, allow_patterns=["lm/*"])) / "lm"
+
+
 class SeaASR:
-    def __init__(self, model, frontend, decoder, device):
+    def __init__(self, model, frontend, decoder, device, lm=None, lm_workers: int = 1, rescorer=None):
         self.model = model
         self.frontend = frontend
         self.decoder = decoder
         self.device = device
+        self.lm = lm  # sea_asr.lm.LMDecoder or None (greedy)
+        self.lm_workers = lm_workers
+        self.rescorer = rescorer  # sea_asr.rescore.NBestRescorer or None (KenLM 1-best)
 
     @classmethod
-    def from_pretrained(cls, path_or_hf_repo: str, revision: str | None = None, device: str | None = None) -> "SeaASR":
+    def from_pretrained(cls, path_or_hf_repo: str, revision: str | None = None, device: str | None = None,
+                        lm: str | None = None, lm_revision: str | None = None, alpha: float | None = None,
+                        beta: float | None = None, beam: int | None = None, lm_workers: int = 1,
+                        rescore: bool | str = False, rescore_revision: str | None = None) -> "SeaASR":
+        """lm: an LM directory or HF repo id (see sea_asr.lm); alpha / beta / beam override its lm_config.json.
+        lm_workers > 1 runs the beam search in a fork pool of that size.
+        rescore: off by default. True = second pass with the pinned default causal LM (sea_asr.rescore), or a model
+        id / directory (then give rescore_revision). Needs lm; the measured setting is alpha 0.4, beta 1.5, beam 128."""
         import torch
         from safetensors.torch import load_file
         from transformers import AutoTokenizer
@@ -69,8 +91,26 @@ class SeaASR:
         model.eval().to(device)
 
         tok = AutoTokenizer.from_pretrained(enc_id, revision=enc_rev)
-        return cls(model, LogMelFrontEnd.from_pretrained(enc_id, enc_rev), UnitDecoder(tok, units["gemma_ids"]),
-                   device)
+        decoder = UnitDecoder(tok, units["gemma_ids"])
+        lm_dec = None
+        if lm is not None:
+            from .lm import LMDecoder
+
+            lm_dec = LMDecoder.from_dir(_resolve_lm_dir(lm, lm_revision), decoder, alpha=alpha, beta=beta, beam=beam)
+        rescorer = None
+        if rescore:
+            if lm_dec is None:
+                raise ValueError("rescore needs lm= (it reranks the KenLM beam search's N-best list)")
+            from .rescore import NBestRescorer
+
+            if rescore is True:
+                rescorer = NBestRescorer(device=device)
+            elif rescore_revision is None:
+                raise ValueError("pin the rescoring LM: give rescore_revision (a commit)")
+            else:
+                rescorer = NBestRescorer(rescore, rescore_revision, device=device)
+        return cls(model, LogMelFrontEnd.from_pretrained(enc_id, enc_rev), decoder, device, lm_dec, lm_workers,
+                   rescorer)
 
     def _autocast(self):
         import torch
@@ -79,7 +119,8 @@ class SeaASR:
             return torch.autocast("cuda", dtype=torch.bfloat16)
         return contextlib.nullcontext()
 
-    def _run_batch(self, batch):
+    def _run_batch(self, batch, log_probs: bool = False):
+        """Greedy frame ids per piece, or float32 log-probs [T, units] per piece when log_probs=True."""
         import numpy as np
         import torch
 
@@ -92,8 +133,11 @@ class SeaASR:
         with torch.no_grad(), self._autocast():
             feats, fmask = self.frontend(waves, lens)
             logits, out_len = self.model(feats, fmask)
+        out_len = out_len.cpu().tolist()
+        if log_probs:  # row by row: a 30 s piece is ~750 x 34k floats, a full batch would be gigabytes on the host
+            return [torch.log_softmax(logits[j, :n].float(), -1).cpu().numpy() for j, n in enumerate(out_len)]
         ids = logits.argmax(-1).cpu().tolist()
-        return [row[:n] for row, n in zip(ids, out_len.cpu().tolist())]
+        return [row[:n] for row, n in zip(ids, out_len)]
 
     def transcribe(self, audio, return_words: bool = False):
         """audio: a path, a float32 16 kHz array, an (array, sample_rate) tuple, or a list of these.
@@ -113,14 +157,32 @@ class SeaASR:
 
         results = {}
         for batch in make_batches(pieces):
-            for p, frames in zip(batch, self._run_batch(batch)):
-                results[id(p)] = greedy_runs(frames)
+            if self.lm is None:
+                for p, frames in zip(batch, self._run_batch(batch)):
+                    results[id(p)] = greedy_runs(frames)
+            elif self.rescorer is not None:
+                nb = self.lm.nbest_batch(self._run_batch(batch, log_probs=True), self.rescorer.topk, self.lm_workers)
+                for p, (t, _, _, *frames) in zip(batch, self.rescorer.pick(nb)):
+                    results[id(p)] = (t, self.lm.words_from_frames(frames[0], p.offset_s)
+                                      if return_words and frames else [])
+            elif return_words:
+                for p, lp in zip(batch, self._run_batch(batch, log_probs=True)):
+                    results[id(p)] = self.lm.decode_words(lp, p.offset_s)
+            else:
+                texts = self.lm.decode_batch(self._run_batch(batch, log_probs=True), self.lm_workers)
+                for p, t in zip(batch, texts):
+                    results[id(p)] = (t, [])
 
         out = []
         for i in range(len(items)):
             mine = sorted((p for p in pieces if p.item == i), key=lambda p: p.offset_s)
             texts, words = [], []
             for p in mine:
+                if self.lm is not None:
+                    t, w = results[id(p)]
+                    texts.append(t)
+                    words += w
+                    continue
                 runs = results[id(p)]
                 texts.append(self.decoder.text([u for u, _, _ in runs]))
                 if return_words:
