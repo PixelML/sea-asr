@@ -61,10 +61,11 @@ python -m sea_asr --model PixelML/sea-asr-id --lm path/to/lm clip.flac --srt out
 The LM directory holds a KenLM binary (`*.bin`, or `*.arpa`), `unigrams.txt`, and `lm_config.json` with the tuned
 `{"alpha": …, "beta": …, "beam": …, "rescore_beam": …}` (`beam` = plain LM decode, `rescore_beam` = N-best list
 for rescoring); arguments override the file. Greedy decoding stays the default. The beam search runs in Python on
-the CPU in a process pool; `lm_workers` defaults to all usable CPUs (affinity mask, cgroup quota), 1 = no pool.
-Runs of near-certain blank frames are collapsed before the search (`compress_blanks=True`, the default; word times
-stay on the original timeline); `compress_blanks=False` or `--no-compress-blanks` searches every frame. Measured on FLEURS-id test (GB10, 12 workers, beam 32):
-38x real time with the LM, 49x greedy.
+the CPU, in-process by default (`lm_workers=1`); `lm_workers=N` uses a pool of N processes, which was about 2x faster
+on a 12-core Mac and slower on a 32-vCPU H100 host, so measure on yours. Runs of near-certain blank frames are
+collapsed before the search (`compress_blanks=True`, the default; word times stay on the original timeline);
+`compress_blanks=False` or `--no-compress-blanks` searches every frame. Beam-search CPU time with v0.2.1 defaults
+(beam 128, FLEURS-id dev): about 5 s per audio hour on the H100 host.
 
 ### Rescoring (optional, off by default)
 

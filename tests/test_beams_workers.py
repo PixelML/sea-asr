@@ -134,16 +134,17 @@ def test_default_workers_logged_once_and_used_by_seaasr(monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="sea_asr"):
         a = SeaASR(None, None, None, "cpu", lm=object())
         b = SeaASR(None, None, None, "cpu", lm=object())
-    assert a.lm_workers == b.lm_workers == 6
-    assert sum("worker process" in r.getMessage() for r in caplog.records) == 1
+    assert a.lm_workers == b.lm_workers == 1  # default: in-process, whatever the CPU count
+    hints = [r.getMessage() for r in caplog.records if "lm_workers=4" in r.getMessage()]
+    assert len(hints) == 1 and "6 usable CPUs" in hints[0]
     assert SeaASR(None, None, None, "cpu", lm=object(), lm_workers=3).lm_workers == 3  # explicit wins
     assert SeaASR(None, None, None, "cpu").lm_workers == 1  # greedy: no pool, nothing resolved
 
 
-def test_pool_runs_with_all_cores_default(tmp_path):
-    """Both pooled paths run with the default worker count on this machine and give the sequential result."""
+def test_pool_with_all_cores_matches_sequential(tmp_path):
+    """Both pooled paths (opt-in lm_workers=N) at all usable CPUs give the in-process result."""
     dec = LMDecoder.from_dir(lm_dir(tmp_path, beam=16, rescore_beam=32), ToyDecoder())
-    w = lm_mod.default_workers()
+    w = max(2, usable_cpus())
     assert dec.decode_batch([LP] * 3, workers=w) == ["saya makan nasi"] * 3
     seq = dec.nbest_batch([LP] * 3, topk=3, workers=1)
     par = dec.nbest_batch([LP] * 3, topk=3, workers=w)

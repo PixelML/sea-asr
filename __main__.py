@@ -17,7 +17,7 @@ def main():
     ap.add_argument("--alpha", type=float)
     ap.add_argument("--beta", type=float)
     ap.add_argument("--beam", type=int)
-    ap.add_argument("--lm-workers", type=int, help="beam-search processes (default: all usable CPUs)")
+    ap.add_argument("--lm-workers", type=int, help="beam-search processes (default 1, in-process)")
     ap.add_argument("--no-compress-blanks", action="store_true", help="beam search on every frame (v0.2.0)")
     ap.add_argument("--srt", help="write <name>.srt files into this directory")
     a = ap.parse_args()

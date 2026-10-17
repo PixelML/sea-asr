@@ -64,7 +64,7 @@ class SeaASR:
                         rescore_beam: int | None = None, compress_blanks: bool | None = None) -> "SeaASR":
         """lm: an LM directory or HF repo id (see sea_asr.lm); alpha / beta / beam / rescore_beam override its
         lm_config.json. beam is the plain LM decode; rescore_beam builds the N-best list when rescore is on.
-        lm_workers: beam-search processes; None = all usable CPUs (affinity and cgroup quota), 1 = no pool.
+        lm_workers: beam-search processes; None = 1 (in-process, no pool); N > 1 = a fork pool of N.
         compress_blanks: collapse blank-only frame runs before the beam search (default on; False = v0.2.0 frames).
         rescore: off by default. True = second pass with the pinned default causal LM (sea_asr.rescore), or a model
         id / directory (then give rescore_revision). Needs lm; the measured setting is alpha 0.4, beta 1.5,

@@ -73,9 +73,13 @@ files only. Where the spec was silent or ambiguous, the most literal reading was
 22. Two beams: `beam` (plain LM decode, `decode` / `transcribe`) and `rescore_beam` (the N-best list that
     `sea_asr.rescore` reranks). Arguments override `lm_config.json`. A v0.2.0 config without `"rescore_beam"` falls
     back to `beam` (the old single-beam behaviour) and logs one warning the first time the N-best path runs.
-23. `lm_workers=None` (the default) = all usable CPUs: `len(os.sched_getaffinity(0))` where it exists (not on macOS),
-    else `os.cpu_count()`, capped by a cgroup CPU quota (v2 `cpu.max`, else v1 `cpu.cfs_quota_us / cpu.cfs_period_us`,
-    rounded up). The count is logged once. Greedy decoding resolves nothing and starts no pool.
+23. `lm_workers=None` (the default) = 1: decode in-process, no pool. Measured with compress_blanks on, beam 128,
+    s of beam search per audio hour. H100 host, 32 vCPU, FLEURS-id dev: 1/4/8/16/32 workers = 4.9/6.0/6.1/6.7/8.4
+    (plain), 6.0/6.7/6.4/7.4/9.9 (N-best). Mac, 12 cores: 4 workers about 2x faster than 1, both on FLEURS-id dev
+    (1.6 vs 0.8 s for 0.4 h) and on one 11-min file (0.8 vs 0.4 s). So the pool helps or hurts by host, not by input
+    size; 1 worker is the default and a one-line hint is logged once. `usable_cpus()` (affinity mask, else
+    `os.cpu_count()`, capped by a cgroup v2 `cpu.max` or v1 `cpu.cfs_quota_us / cpu.cfs_period_us` quota) is used in
+    the hint and is there for callers that size a pool.
 24. One fork pool per `LMDecoder`, made on the first pooled call and reused for every batch and both paths (v0.2.0
     made a new pool per call); `close()`, the context manager or garbage collection stops it.
 25. Pooled calls do not pickle the dense [T × 34,610] log-probs. The parent copies a batch once into one

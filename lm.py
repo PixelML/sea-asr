@@ -89,14 +89,17 @@ def _shm_work(job):
         shm.close()
 
 
+DEFAULT_WORKERS = 1  # in-process: fastest on an H100 host (32 vCPU) on FLEURS-id; a pool won on a 12-core Mac
+
+
 def default_workers() -> int:
-    """lm_workers when the caller gives none: all usable CPUs (logged once per process)."""
+    """lm_workers when the caller gives none: 1, in-process (logged once per process with a hint)."""
     global _logged_workers
-    n = usable_cpus()
     if not _logged_workers:
-        log.info("sea_asr: LM beam search on %d worker process(es) (all usable CPUs; set lm_workers= to change)", n)
+        log.info("sea_asr: LM beam search in-process (lm_workers=1). On some hosts lm_workers=4 is about 2x faster "
+                 "(this host: %d usable CPUs); measure before changing.", usable_cpus())
         _logged_workers = True
-    return n
+    return DEFAULT_WORKERS
 
 
 class _KnownWarningsFilter(logging.Filter):
