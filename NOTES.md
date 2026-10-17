@@ -67,3 +67,35 @@ files only. Where the spec was silent or ambiguous, the most literal reading was
 20. Log-probs are `log_softmax` in float32 of the (autocast) logits, computed per piece row so a 600 s batch never
     holds the full [B, T, 34k] float32 tensor on the host.
 21. Word timestamps with the LM come from pyctcdecode's word frames `[start, end)` × 40 ms (+ piece offset).
+
+## v0.2.1: beams, workers, pooled decoding
+
+22. Two beams: `beam` (plain LM decode, `decode` / `transcribe`) and `rescore_beam` (the N-best list that
+    `sea_asr.rescore` reranks). Arguments override `lm_config.json`. A v0.2.0 config without `"rescore_beam"` falls
+    back to `beam` (the old single-beam behaviour) and logs one warning the first time the N-best path runs.
+23. `lm_workers=None` (the default) = all usable CPUs: `len(os.sched_getaffinity(0))` where it exists (not on macOS),
+    else `os.cpu_count()`, capped by a cgroup CPU quota (v2 `cpu.max`, else v1 `cpu.cfs_quota_us / cpu.cfs_period_us`,
+    rounded up). The count is logged once. Greedy decoding resolves nothing and starts no pool.
+24. One fork pool per `LMDecoder`, made on the first pooled call and reused for every batch and both paths (v0.2.0
+    made a new pool per call); `close()`, the context manager or garbage collection stops it.
+25. Pooled calls do not pickle the dense [T × 34,610] log-probs. The parent copies a batch once into one
+    `multiprocessing.shared_memory` block; each worker maps its utterance as a read-only view and runs pyctcdecode's
+    public `decode()` / `decode_beams()`, so results equal pyctcdecode's by construction (tests/test_beams_workers.py)
+    and pyctcdecode's per-row re-softmax stays parallel. The parent unlinks the block after the batch. The parent starts
+    its resource tracker before forking the pool, so the children share it: their attach re-registers the same name
+    (a no-op) and the parent's unlink unregisters it once. (A tracker started later gives each child its own tracker,
+    which reports the block as leaked; a child-side unregister makes the parent's unlink raise KeyError.)
+    A CSR transfer of only pyctcdecode's kept entries (>= token_min_logp plus the frame argmax) was also exact, but it
+    moves that re-softmax into the serial parent and was slower than one process on FLEURS-id (Mac, 12 cores); a
+    GPU-side kept set cannot be bit-exact, because the re-softmax depends on every entry of the row and on numpy's
+    float32 summation order.
+26. `compress_blanks` (default on; `compress_blanks=False`, `"compress_blanks": false` in lm_config.json or CLI
+    `--no-compress-blanks` turn it off): before every beam search, each run of blank-only frames is collapsed into its
+    first frame (run collapsing from `lm_fast.compress_blanks`). Blank-only = blank is the argmax and every other unit
+    is below pyctcdecode's `token_min_logp` (−5) minus a 0.01 margin, so pyctcdecode expands only blank there and
+    every beam takes it: texts, word frames and the N-best order cannot change, and every hypothesis's acoustic and
+    combined scores move by the same constant (so rescoring picks the same text). `lm_fast`'s p(blank) > 0.99 rule
+    was not safe: a token can keep log p ≥ −5 at such a frame, and the beam used it one frame early; dropping that
+    frame moved 16 of 276 word starts by 40 ms on FLEURS-id. One frame stays per run, so a unit repeated across a
+    blank is not merged. Word times use the kept → original frame map: start = original index of the first kept
+    frame, end = original index of the last kept frame + 1.

@@ -19,7 +19,7 @@ from pathlib import Path
 from .decode import to_srt, to_vtt
 
 __all__ = ["SeaASR", "to_srt", "to_vtt"]
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 
 def _resolve_dir(path_or_repo: str, revision: str | None) -> Path:
@@ -43,24 +43,32 @@ def _resolve_lm_dir(lm: str, revision: str | None) -> Path:
 
 
 class SeaASR:
-    def __init__(self, model, frontend, decoder, device, lm=None, lm_workers: int = 1, rescorer=None):
+    def __init__(self, model, frontend, decoder, device, lm=None, lm_workers: int | None = None, rescorer=None):
         self.model = model
         self.frontend = frontend
         self.decoder = decoder
         self.device = device
         self.lm = lm  # sea_asr.lm.LMDecoder or None (greedy)
-        self.lm_workers = lm_workers
+        if lm is not None and lm_workers is None:
+            from .lm import default_workers
+
+            lm_workers = default_workers()
+        self.lm_workers = lm_workers or 1  # beam-search processes (plain LM decode and the rescoring N-best list)
         self.rescorer = rescorer  # sea_asr.rescore.NBestRescorer or None (KenLM 1-best)
 
     @classmethod
     def from_pretrained(cls, path_or_hf_repo: str, revision: str | None = None, device: str | None = None,
                         lm: str | None = None, lm_revision: str | None = None, alpha: float | None = None,
-                        beta: float | None = None, beam: int | None = None, lm_workers: int = 1,
-                        rescore: bool | str = False, rescore_revision: str | None = None) -> "SeaASR":
-        """lm: an LM directory or HF repo id (see sea_asr.lm); alpha / beta / beam override its lm_config.json.
-        lm_workers > 1 runs the beam search in a fork pool of that size.
+                        beta: float | None = None, beam: int | None = None, lm_workers: int | None = None,
+                        rescore: bool | str = False, rescore_revision: str | None = None,
+                        rescore_beam: int | None = None, compress_blanks: bool | None = None) -> "SeaASR":
+        """lm: an LM directory or HF repo id (see sea_asr.lm); alpha / beta / beam / rescore_beam override its
+        lm_config.json. beam is the plain LM decode; rescore_beam builds the N-best list when rescore is on.
+        lm_workers: beam-search processes; None = all usable CPUs (affinity and cgroup quota), 1 = no pool.
+        compress_blanks: collapse blank-only frame runs before the beam search (default on; False = v0.2.0 frames).
         rescore: off by default. True = second pass with the pinned default causal LM (sea_asr.rescore), or a model
-        id / directory (then give rescore_revision). Needs lm; the measured setting is alpha 0.4, beta 1.5, beam 128."""
+        id / directory (then give rescore_revision). Needs lm; the measured setting is alpha 0.4, beta 1.5,
+        rescore_beam 128."""
         import torch
         from safetensors.torch import load_file
         from transformers import AutoTokenizer
@@ -96,7 +104,8 @@ class SeaASR:
         if lm is not None:
             from .lm import LMDecoder
 
-            lm_dec = LMDecoder.from_dir(_resolve_lm_dir(lm, lm_revision), decoder, alpha=alpha, beta=beta, beam=beam)
+            lm_dec = LMDecoder.from_dir(_resolve_lm_dir(lm, lm_revision), decoder, alpha=alpha, beta=beta, beam=beam,
+                                        rescore_beam=rescore_beam, compress_blanks=compress_blanks)
         rescorer = None
         if rescore:
             if lm_dec is None:

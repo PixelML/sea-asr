@@ -45,12 +45,13 @@ perbedaan segera setelah
 ### With a language model (optional)
 
 ```bash
-pip install "sea_asr[lm] @ git+https://github.com/PixelML/sea-asr@v0.2.0"   # adds pyctcdecode 0.5.0 + kenlm (pinned commit)
+pip install "sea_asr[lm] @ git+https://github.com/PixelML/sea-asr@v0.2.1"   # adds pyctcdecode 0.5.0 + kenlm (pinned commit)
 ```
 
 ```python
 asr = SeaASR.from_pretrained("PixelML/sea-asr-id", lm="path/to/lm")       # or lm="<hf-repo>" with an lm/ folder
 asr = SeaASR.from_pretrained("PixelML/sea-asr-id", lm="path/to/lm", alpha=0.4, beta=1.0, beam=32, lm_workers=8)
+asr = SeaASR.from_pretrained("PixelML/sea-asr-id", lm="PixelML/sea-asr-id", rescore=True, rescore_beam=128)
 ```
 
 ```bash
@@ -58,14 +59,17 @@ python -m sea_asr --model PixelML/sea-asr-id --lm path/to/lm clip.flac --srt out
 ```
 
 The LM directory holds a KenLM binary (`*.bin`, or `*.arpa`), `unigrams.txt`, and `lm_config.json` with the tuned
-`{"alpha": …, "beta": …}`; arguments override the file. Greedy decoding stays the default. The beam search runs in
-Python on the CPU; `lm_workers` > 1 decodes in a process pool. Measured on FLEURS-id test (GB10, 12 workers, beam 32):
+`{"alpha": …, "beta": …, "beam": …, "rescore_beam": …}` (`beam` = plain LM decode, `rescore_beam` = N-best list
+for rescoring); arguments override the file. Greedy decoding stays the default. The beam search runs in Python on
+the CPU in a process pool; `lm_workers` defaults to all usable CPUs (affinity mask, cgroup quota), 1 = no pool.
+Runs of near-certain blank frames are collapsed before the search (`compress_blanks=True`, the default; word times
+stay on the original timeline); `compress_blanks=False` or `--no-compress-blanks` searches every frame. Measured on FLEURS-id test (GB10, 12 workers, beam 32):
 38x real time with the LM, 49x greedy.
 
 ### Rescoring (optional, off by default)
 
 ```bash
-pip install "sea_asr[rescore] @ git+https://github.com/PixelML/sea-asr@v0.2.0"
+pip install "sea_asr[rescore] @ git+https://github.com/PixelML/sea-asr@v0.2.1"
 ```
 
 ```python
@@ -88,7 +92,7 @@ python -m sea_asr.convert runs/my-run/best out/my-run      # training checkpoint
 ## Tests
 
 ```bash
-pytest tests/test_decode.py tests/test_lm.py tests/test_rescore.py   # CPU unit tests (test_lm/test_rescore need sea_asr[lm])
+pytest tests/            # CPU unit tests (test_lm, test_rescore, test_beams_workers need sea_asr[lm])
 ```
 
 ## Credits
