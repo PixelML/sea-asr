@@ -45,7 +45,7 @@ perbedaan segera setelah
 ### With a language model (optional)
 
 ```bash
-pip install "sea_asr[lm] @ git+https://github.com/PixelML/sea-asr@v0.2.1"   # adds pyctcdecode 0.5.0 + kenlm (pinned commit)
+pip install "sea_asr[lm] @ git+https://github.com/PixelML/sea-asr@v0.2.2"   # adds pyctcdecode 0.5.0 + kenlm (pinned commit)
 ```
 
 ```python
@@ -70,7 +70,7 @@ collapsed before the search (`compress_blanks=True`, the default; word times sta
 ### Rescoring (optional, off by default)
 
 ```bash
-pip install "sea_asr[rescore] @ git+https://github.com/PixelML/sea-asr@v0.2.1"
+pip install "sea_asr[rescore] @ git+https://github.com/PixelML/sea-asr@v0.2.2"
 ```
 
 ```python
@@ -79,6 +79,11 @@ asr = SeaASR.from_pretrained("PixelML/sea-asr-id", lm="PixelML/sea-asr-id", resc
 
 A second pass reranks the LM beam search's 32 best hypotheses with a causal LM, by default Sailor2-1B pinned to
 a commit (about 2 GB of GPU memory in bf16). `rescore=True` needs `lm=`.
+
+The prompt, the weights and the list size come from the `"rescore"` block of the LM folder's `lm_config.json`
+(v0.2.2), for example `{"prompt": "...", "a": 0.4, "b": 0.4, "c": 2.0, "top_k": 32}`; `rescore_prompt=`,
+`rescore_weights=(a, b, c)` and `rescore_topk=` override it. Without the block the v0.2.1 defaults apply (Indonesian
+prompt, 0.4 / 0.4 / 1.0, top 32), so existing LM folders give the same output.
 
 Cues have at most 2 lines of 32 characters and last at most 6 s. Inputs longer than 30 s are cut at quiet points
 and the timestamps stay on the original timeline. Input: a file path, a float32 16 kHz mono array, or an

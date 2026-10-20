@@ -105,3 +105,10 @@ def test_word_pieces_join_and_word_times(lm_dir):
 def test_unk_carries_no_text():
     assert clean_text("saya ma⁇kan  ⁇ nasi") == "saya makan nasi"
     assert clean_text("⁇") == ""
+
+
+def test_rescore_block_kept_on_decoder(lm_dir):
+    block = {"prompt": "p\n", "a": 0.5, "b": 0.3, "c": 2.0, "top_k": 16}
+    (lm_dir / "lm_config.json").write_text(json.dumps({"alpha": 1.0, "beta": 0.5, "beam": 16, "rescore": block}))
+    dec = LMDecoder.from_dir(lm_dir, ToyDecoder())
+    assert dec.config["rescore"] == block and dec.alpha == 1.0 and dec.beam == 16

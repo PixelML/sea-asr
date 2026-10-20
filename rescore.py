@@ -7,10 +7,14 @@
 score(h) = am + a * (kenlm_beam - am) + b * nlm + c * words
     am          acoustic log-prob of the beam (pyctcdecode "logit score")
     kenlm_beam  pyctcdecode's beam score (am + alpha * KenLM + beta * words)
-    nlm         sum of the causal LM's log-probs of the hypothesis tokens + EOS after a fixed Indonesian prompt
-Defaults (a 0.4, b 0.4, c 1.0, top 32 distinct hypotheses, beam built with prune_history=False) were chosen on FLEURS
-id validation only. Measured for id-v4 + id-w4 KenLM: FLEURS test 6.11 -> 5.48, CV27 7.00 -> 6.28, GigaSpeech 2
-17.25 -> 16.54 WER. The default LM is Sea AI Lab's Sailor2-1B (Apache-2.0), pinned by commit.
+    nlm         sum of the causal LM's log-probs of the hypothesis tokens + EOS after a fixed prompt
+Defaults (Indonesian prompt, a 0.4, b 0.4, c 1.0, top 32 distinct hypotheses, beam built with prune_history=False) were
+chosen on FLEURS id validation only. Measured for id-v4 + id-w4 KenLM: FLEURS test 6.11 -> 5.48, CV27 7.00 -> 6.28,
+GigaSpeech 2 17.25 -> 16.54 WER. The default LM is Sea AI Lab's Sailor2-1B (Apache-2.0), pinned by commit.
+
+v0.2.2: the prompt, weights and top-k can come from the LM directory's lm_config.json (block "rescore", read by
+rescore_settings()) or from SeaASR.from_pretrained arguments; a missing key keeps the default above, so a config
+without a "rescore" block behaves exactly as v0.2.1.
 """
 
 from __future__ import annotations
@@ -20,11 +24,38 @@ DEFAULT_REVISION = "75c2856ffc7e6a6e64127f40c5f54a953deb682e"
 DEFAULT_WEIGHTS = (0.4, 0.4, 1.0)
 DEFAULT_TOPK = 32
 PROMPT = "Berikut transkripsi ucapan dalam bahasa Indonesia:\n"
+RESCORE_KEYS = ("prompt", "a", "b", "c", "top_k")
+
+
+def rescore_settings(cfg: dict | None = None, prompt: str | None = None,
+                     weights: tuple[float, float, float] | None = None, topk: int | None = None) -> dict:
+    """Resolve the rescoring prompt / weights / top-k: arguments, then lm_config.json's "rescore" block (cfg), then the
+    defaults. Returns {"prompt", "weights": (a, b, c), "topk"}. Unknown keys in the block raise ValueError."""
+    block = (cfg or {}).get("rescore") or {}
+    if not isinstance(block, dict):
+        raise ValueError('lm_config.json "rescore" must be an object')
+    unknown = sorted(set(block) - set(RESCORE_KEYS))
+    if unknown:
+        raise ValueError(f'lm_config.json "rescore": unknown keys {unknown} (allowed: {list(RESCORE_KEYS)})')
+    if weights is None:
+        weights = tuple(float(block.get(k, d)) for k, d in zip("abc", DEFAULT_WEIGHTS))
+    else:
+        weights = tuple(float(w) for w in weights)
+        if len(weights) != 3:
+            raise ValueError("rescore weights: give (a, b, c)")
+    prompt = prompt if prompt is not None else block.get("prompt", PROMPT)
+    if not isinstance(prompt, str):
+        raise ValueError("rescore prompt must be a string")
+    topk = int(topk if topk is not None else block.get("top_k", DEFAULT_TOPK))
+    if topk < 1:
+        raise ValueError("rescore top_k must be >= 1")
+    return {"prompt": prompt, "weights": weights, "topk": topk}
 
 
 class NBestRescorer:
     def __init__(self, model: str = DEFAULT_MODEL, revision: str = DEFAULT_REVISION, device=None,
-                 weights: tuple[float, float, float] = DEFAULT_WEIGHTS, topk: int = DEFAULT_TOPK, batch: int = 64):
+                 weights: tuple[float, float, float] = DEFAULT_WEIGHTS, topk: int = DEFAULT_TOPK, batch: int = 64,
+                 prompt: str = PROMPT):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -32,8 +63,9 @@ class NBestRescorer:
         dtype = torch.bfloat16 if self.device.type == "cuda" else torch.float32
         self.tok = AutoTokenizer.from_pretrained(model, revision=revision)
         self.lm = AutoModelForCausalLM.from_pretrained(model, revision=revision, dtype=dtype).to(self.device).eval()
-        self.prefix = self.tok(PROMPT, add_special_tokens=False)["input_ids"]
-        self.weights, self.topk, self.batch = weights, topk, batch
+        self.prompt = prompt
+        self.prefix = self.tok(prompt, add_special_tokens=False)["input_ids"]
+        self.weights, self.topk, self.batch = tuple(weights), topk, batch
 
     def nlm_scores(self, texts: list[str]) -> dict[str, float]:
         """Log-prob of each distinct text (hypothesis tokens + EOS), batched shortest first."""
@@ -83,4 +115,4 @@ def distinct_nbest(beams, clean, topk: int) -> list[tuple]:
     return out
 
 
-__all__ = ["NBestRescorer", "distinct_nbest", "DEFAULT_MODEL", "DEFAULT_REVISION"]
+__all__ = ["NBestRescorer", "distinct_nbest", "rescore_settings", "DEFAULT_MODEL", "DEFAULT_REVISION"]

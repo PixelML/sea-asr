@@ -187,6 +187,7 @@ class LMDecoder:
         self._pool, self._pool_size = None, 0
         self.compress_blanks = compress_blanks
         self.model_path = str(model_path)
+        self.config: dict = {}  # lm_config.json when built by from_dir()
         self._dec = build_ctcdecoder(list(labels), kenlm_model_path=self.model_path,
                                      unigrams=list(unigrams) if unigrams else None, alpha=alpha, beta=beta)
 
@@ -198,13 +199,15 @@ class LMDecoder:
         rescore_beam (argument, else "rescore_beam" in lm_config.json) drives the N-best list for rescoring. A config
         without "rescore_beam" (v0.2.0) falls back to beam, the old single-beam behaviour, with a warning on use."""
         model, unigrams, cfg = read_lm_dir(lm_dir)
-        return cls(unit_labels(decoder), model, unigrams,
-                   alpha=alpha if alpha is not None else cfg.get("alpha", DEFAULT_ALPHA),
-                   beta=beta if beta is not None else cfg.get("beta", DEFAULT_BETA),
-                   beam=beam if beam is not None else cfg.get("beam", DEFAULT_BEAM),
-                   rescore_beam=rescore_beam if rescore_beam is not None else cfg.get("rescore_beam"),
-                   compress_blanks=compress_blanks if compress_blanks is not None
-                   else cfg.get("compress_blanks", True))
+        dec = cls(unit_labels(decoder), model, unigrams,
+                         alpha=alpha if alpha is not None else cfg.get("alpha", DEFAULT_ALPHA),
+                         beta=beta if beta is not None else cfg.get("beta", DEFAULT_BETA),
+                         beam=beam if beam is not None else cfg.get("beam", DEFAULT_BEAM),
+                         rescore_beam=rescore_beam if rescore_beam is not None else cfg.get("rescore_beam"),
+                         compress_blanks=compress_blanks if compress_blanks is not None
+                         else cfg.get("compress_blanks", True))
+        dec.config = cfg  # the whole lm_config.json (sea_asr.rescore reads its "rescore" block)
+        return dec
 
     def _prep(self, log_probs: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         if not self.compress_blanks:

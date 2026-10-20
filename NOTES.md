@@ -103,3 +103,16 @@ files only. Where the spec was silent or ambiguous, the most literal reading was
     frame moved 16 of 276 word starts by 40 ms on FLEURS-id. One frame stays per run, so a unit repeated across a
     blank is not merged. Word times use the kept → original frame map: start = original index of the first kept
     frame, end = original index of the last kept frame + 1.
+
+## v0.2.2: rescoring settings in lm_config.json
+
+27. `lm_config.json` may hold a `"rescore"` object with the keys `prompt`, `a`, `b`, `c` and `top_k` (any subset).
+    Resolution per key: `SeaASR.from_pretrained` argument (`rescore_prompt`, `rescore_weights=(a, b, c)`,
+    `rescore_topk`), then the block, then the v0.2.1 default (Indonesian prompt, a 0.4, b 0.4, c 1.0, top 32). Unknown
+    keys raise `ValueError`, so a typo cannot silently fall back to the defaults. `LMDecoder.from_dir` keeps the whole
+    file as `LMDecoder.config`; `sea_asr.rescore.rescore_settings()` resolves it.
+28. Nothing else changed: with no block and no arguments the rescorer gets the same prompt ids, weights and top-k as
+    v0.2.1. Checked on 120 FLEURS-id validation utterances (PixelML/sea-asr-id, Mac CPU fp32): texts, N-best lists
+    and picks identical to v0.2.1.
+29. Measured Malay setting (PixelML/sea-asr-ms `lm/lm_config.json`): prompt "Berikut ialah transkripsi pertuturan
+    dalam bahasa Melayu:\n", a 0.4, b 0.4, c 2.0, top 32, chosen on FLEURS ms_my validation only.

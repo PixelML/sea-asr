@@ -19,7 +19,7 @@ from pathlib import Path
 from .decode import to_srt, to_vtt
 
 __all__ = ["SeaASR", "to_srt", "to_vtt"]
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 
 def _resolve_dir(path_or_repo: str, revision: str | None) -> Path:
@@ -61,14 +61,18 @@ class SeaASR:
                         lm: str | None = None, lm_revision: str | None = None, alpha: float | None = None,
                         beta: float | None = None, beam: int | None = None, lm_workers: int | None = None,
                         rescore: bool | str = False, rescore_revision: str | None = None,
-                        rescore_beam: int | None = None, compress_blanks: bool | None = None) -> "SeaASR":
+                        rescore_beam: int | None = None, compress_blanks: bool | None = None,
+                        rescore_prompt: str | None = None, rescore_weights: tuple[float, float, float] | None = None,
+                        rescore_topk: int | None = None) -> "SeaASR":
         """lm: an LM directory or HF repo id (see sea_asr.lm); alpha / beta / beam / rescore_beam override its
         lm_config.json. beam is the plain LM decode; rescore_beam builds the N-best list when rescore is on.
         lm_workers: beam-search processes; None = 1 (in-process, no pool); N > 1 = a fork pool of N.
         compress_blanks: collapse blank-only frame runs before the beam search (default on; False = v0.2.0 frames).
         rescore: off by default. True = second pass with the pinned default causal LM (sea_asr.rescore), or a model
         id / directory (then give rescore_revision). Needs lm; the measured setting is alpha 0.4, beta 1.5,
-        rescore_beam 128."""
+        rescore_beam 128.
+        rescore_prompt / rescore_weights (a, b, c) / rescore_topk override the "rescore" block of lm_config.json
+        (keys "prompt", "a", "b", "c", "top_k"); missing keys keep the defaults of sea_asr.rescore (v0.2.1 behaviour)."""
         import torch
         from safetensors.torch import load_file
         from transformers import AutoTokenizer
@@ -110,14 +114,15 @@ class SeaASR:
         if rescore:
             if lm_dec is None:
                 raise ValueError("rescore needs lm= (it reranks the KenLM beam search's N-best list)")
-            from .rescore import NBestRescorer
+            from .rescore import NBestRescorer, rescore_settings
 
+            rs = rescore_settings(lm_dec.config, rescore_prompt, rescore_weights, rescore_topk)
             if rescore is True:
-                rescorer = NBestRescorer(device=device)
+                rescorer = NBestRescorer(device=device, **rs)
             elif rescore_revision is None:
                 raise ValueError("pin the rescoring LM: give rescore_revision (a commit)")
             else:
-                rescorer = NBestRescorer(rescore, rescore_revision, device=device)
+                rescorer = NBestRescorer(rescore, rescore_revision, device=device, **rs)
         return cls(model, LogMelFrontEnd.from_pretrained(enc_id, enc_rev), decoder, device, lm_dec, lm_workers,
                    rescorer)
 
