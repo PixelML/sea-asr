@@ -19,11 +19,14 @@ def main():
     ap.add_argument("--beam", type=int)
     ap.add_argument("--lm-workers", type=int, help="beam-search processes (default 1, in-process)")
     ap.add_argument("--no-compress-blanks", action="store_true", help="beam search on every frame (v0.2.0)")
+    ap.add_argument("--hotword", action="append", help="word or phrase to boost in the LM beam search (repeatable)")
+    ap.add_argument("--hotword-weight", type=float, help="hotword boost (default 10, pyctcdecode's)")
     ap.add_argument("--srt", help="write <name>.srt files into this directory")
     a = ap.parse_args()
     asr = SeaASR.from_pretrained(a.model, revision=a.revision, device=a.device, lm=a.lm, alpha=a.alpha, beta=a.beta,
                                  beam=a.beam, lm_workers=a.lm_workers,
-                                 compress_blanks=False if a.no_compress_blanks else None)
+                                 compress_blanks=False if a.no_compress_blanks else None,
+                                 hotwords=a.hotword, hotword_weight=a.hotword_weight)
     outs = asr.transcribe(list(a.audio), return_words=bool(a.srt))
     for path, out in zip(a.audio, outs):
         if a.srt:

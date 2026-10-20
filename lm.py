@@ -30,6 +30,7 @@ import numpy as np
 from .decode import FRAME_S
 
 DEFAULT_ALPHA, DEFAULT_BETA, DEFAULT_BEAM = 0.5, 1.0, 32
+DEFAULT_HOTWORD_WEIGHT = 10.0  # pyctcdecode's default
 UNK_WORD = "⁇"
 log = logging.getLogger("sea_asr")
 
@@ -65,7 +66,7 @@ _logged_workers = False
 # its utterance as a read-only view and runs pyctcdecode's public decode() / decode_beams() on it. Nothing large is
 # pickled, the per-utterance work (pyctcdecode's own re-softmax included) stays in the workers, and the result is
 # pyctcdecode's own result by construction.
-_POOL_DECODERS: dict[int, object] = {}  # filled before the fork; the children find their decoder here
+_POOL_DECODERS: dict[int, tuple] = {}  # (decoder, hotword kwargs), filled before the fork; the children find it here
 
 
 def _shm_work(job):
@@ -78,11 +79,12 @@ def _shm_work(job):
     try:
         x = np.ndarray(shape, dtype=np.dtype(dtype), buffer=shm.buf, offset=offset)
         x.flags.writeable = False
-        dec = _POOL_DECODERS[key]
+        dec, hw = _POOL_DECODERS[key]
         if top1:
-            out = dec.decode(x, beam_width=beam)
+            out = dec.decode(x, beam_width=beam, **hw)
         else:  # the same tuples as decode_beams_batch(): kenlm state dropped
-            out = [(t, f, am, sc) for t, _, f, am, sc in dec.decode_beams(x, beam_width=beam, prune_history=False)]
+            out = [(t, f, am, sc) for t, _, f, am, sc in dec.decode_beams(x, beam_width=beam, prune_history=False,
+                                                                           **hw)]
         del x
         return out
     finally:
@@ -173,9 +175,12 @@ class LMDecoder:
 
     def __init__(self, labels: Sequence[str], model_path: str | Path, unigrams: Sequence[str] | None = None,
                  alpha: float = DEFAULT_ALPHA, beta: float = DEFAULT_BETA, beam: int = DEFAULT_BEAM,
-                 rescore_beam: int | None = None, compress_blanks: bool = True):
+                 rescore_beam: int | None = None, compress_blanks: bool = True,
+                 hotwords: Sequence[str] | None = None, hotword_weight: float = DEFAULT_HOTWORD_WEIGHT):
         """rescore_beam: beam for nbest_batch (the N-best list that sea_asr.rescore reranks); None = beam.
-        compress_blanks: collapse blank-only frame runs before every beam search (see compress_blanks())."""
+        compress_blanks: collapse blank-only frame runs before every beam search (see compress_blanks()).
+        hotwords: words or phrases (lower case, as the model writes them) that every beam search boosts by
+        hotword_weight, e.g. names and acronyms; pyctcdecode's hotword scorer."""
         try:
             from pyctcdecode import build_ctcdecoder
         except ImportError as e:
@@ -186,6 +191,8 @@ class LMDecoder:
         self._rescore_beam_fallback = rescore_beam is None
         self._pool, self._pool_size = None, 0
         self.compress_blanks = compress_blanks
+        self.hotwords = list(hotwords or [])
+        self._hw = {"hotwords": self.hotwords, "hotword_weight": hotword_weight} if self.hotwords else {}
         self.model_path = str(model_path)
         self._dec = build_ctcdecoder(list(labels), kenlm_model_path=self.model_path,
                                      unigrams=list(unigrams) if unigrams else None, alpha=alpha, beta=beta)
@@ -193,7 +200,8 @@ class LMDecoder:
     @classmethod
     def from_dir(cls, lm_dir: str | Path, decoder, alpha: float | None = None, beta: float | None = None,
                  beam: int | None = None, rescore_beam: int | None = None,
-                 compress_blanks: bool | None = None) -> "LMDecoder":
+                 compress_blanks: bool | None = None, hotwords: Sequence[str] | None = None,
+                 hotword_weight: float | None = None) -> "LMDecoder":
         """Arguments override lm_config.json, which overrides the defaults. beam drives the plain LM decode only;
         rescore_beam (argument, else "rescore_beam" in lm_config.json) drives the N-best list for rescoring. A config
         without "rescore_beam" (v0.2.0) falls back to beam, the old single-beam behaviour, with a warning on use."""
@@ -204,7 +212,9 @@ class LMDecoder:
                    beam=beam if beam is not None else cfg.get("beam", DEFAULT_BEAM),
                    rescore_beam=rescore_beam if rescore_beam is not None else cfg.get("rescore_beam"),
                    compress_blanks=compress_blanks if compress_blanks is not None
-                   else cfg.get("compress_blanks", True))
+                   else cfg.get("compress_blanks", True),
+                   hotwords=hotwords,
+                   hotword_weight=hotword_weight if hotword_weight is not None else DEFAULT_HOTWORD_WEIGHT)
 
     def _prep(self, log_probs: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         if not self.compress_blanks:
@@ -219,7 +229,7 @@ class LMDecoder:
             from multiprocessing import get_context, resource_tracker
 
             resource_tracker.ensure_running()  # before the fork, so the children share it (see _shm_work)
-            _POOL_DECODERS[id(self)] = self._dec
+            _POOL_DECODERS[id(self)] = (self._dec, self._hw)
             self._pool, self._pool_size = get_context("fork").Pool(workers), workers
         return self._pool
 
@@ -262,7 +272,7 @@ class LMDecoder:
         self.close()
 
     def decode(self, log_probs: np.ndarray) -> str:
-        return clean_text(self._dec.decode(self._prep(log_probs)[0], beam_width=self.beam))
+        return clean_text(self._dec.decode(self._prep(log_probs)[0], beam_width=self.beam, **self._hw))
 
     def decode_batch(self, log_probs: list[np.ndarray], workers: int = 1) -> list[str]:
         """workers > 1: the decoder's persistent fork pool (see _get_pool)."""
@@ -286,7 +296,7 @@ class LMDecoder:
             beams = self._pooled([x for x, _ in preps], workers, False, beam)
         else:
             beams = [[(t, f, am, sc) for t, _, f, am, sc in
-                      self._dec.decode_beams(x, beam_width=beam, prune_history=False)] for x, _ in preps]
+                      self._dec.decode_beams(x, beam_width=beam, prune_history=False, **self._hw)] for x, _ in preps]
         return [distinct_nbest([(t, _remap_frames(f, idx), am, sc) for t, f, am, sc in b], clean_text, topk)
                 for b, (_, idx) in zip(beams, preps)]
 
@@ -298,5 +308,6 @@ class LMDecoder:
         """Best beam text plus word timestamps from the beam's word frames ([start, end) in 40 ms frames)."""
         # prune_history=True as in pyctcdecode's decode(), so the text equals decode() (its default here is False)
         x, idx = self._prep(log_probs)
-        text, _, word_frames, _, _ = self._dec.decode_beams(x, beam_width=self.beam, prune_history=True)[0]
+        text, _, word_frames, _, _ = self._dec.decode_beams(x, beam_width=self.beam, prune_history=True,
+                                                            **self._hw)[0]
         return clean_text(text), self.words_from_frames(_remap_frames(word_frames, idx), offset_s)

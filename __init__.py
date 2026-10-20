@@ -61,11 +61,14 @@ class SeaASR:
                         lm: str | None = None, lm_revision: str | None = None, alpha: float | None = None,
                         beta: float | None = None, beam: int | None = None, lm_workers: int | None = None,
                         rescore: bool | str = False, rescore_revision: str | None = None,
-                        rescore_beam: int | None = None, compress_blanks: bool | None = None) -> "SeaASR":
+                        rescore_beam: int | None = None, compress_blanks: bool | None = None,
+                        hotwords: list[str] | None = None, hotword_weight: float | None = None) -> "SeaASR":
         """lm: an LM directory or HF repo id (see sea_asr.lm); alpha / beta / beam / rescore_beam override its
         lm_config.json. beam is the plain LM decode; rescore_beam builds the N-best list when rescore is on.
         lm_workers: beam-search processes; None = 1 (in-process, no pool); N > 1 = a fork pool of N.
         compress_blanks: collapse blank-only frame runs before the beam search (default on; False = v0.2.0 frames).
+        hotwords: names, acronyms or phrases (lower case) that the LM beam search boosts by hotword_weight (default
+        10, pyctcdecode's). Needs lm.
         rescore: off by default. True = second pass with the pinned default causal LM (sea_asr.rescore), or a model
         id / directory (then give rescore_revision). Needs lm; the measured setting is alpha 0.4, beta 1.5,
         rescore_beam 128."""
@@ -101,11 +104,14 @@ class SeaASR:
         tok = AutoTokenizer.from_pretrained(enc_id, revision=enc_rev)
         decoder = UnitDecoder(tok, units["gemma_ids"])
         lm_dec = None
+        if hotwords and lm is None:
+            raise ValueError("hotwords need lm= (they boost the KenLM beam search; greedy decoding has no beam)")
         if lm is not None:
             from .lm import LMDecoder
 
             lm_dec = LMDecoder.from_dir(_resolve_lm_dir(lm, lm_revision), decoder, alpha=alpha, beta=beta, beam=beam,
-                                        rescore_beam=rescore_beam, compress_blanks=compress_blanks)
+                                        rescore_beam=rescore_beam, compress_blanks=compress_blanks,
+                                        hotwords=hotwords, hotword_weight=hotword_weight)
         rescorer = None
         if rescore:
             if lm_dec is None:
