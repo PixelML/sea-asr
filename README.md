@@ -67,6 +67,22 @@ collapsed before the search (`compress_blanks=True`, the default; word times sta
 `compress_blanks=False` or `--no-compress-blanks` searches every frame. Beam-search CPU time with v0.2.1 defaults
 (beam 128, FLEURS-id dev): about 5 s per audio hour on the H100 host.
 
+### Hotwords (optional, LM only)
+
+```python
+asr = SeaASR.from_pretrained("PixelML/sea-asr-id", lm="PixelML/sea-asr-id",
+                             hotwords=["puan maharani", "bpih", "honoris kausa"], hotword_weight=5.0)
+```
+
+```bash
+python -m sea_asr --model PixelML/sea-asr-id --lm PixelML/sea-asr-id --hotword bpih --hotword "honoris kausa" clip.flac
+```
+
+Boosts names and acronyms in every LM beam search (pyctcdecode's hotword scorer; `hotword_weight` defaults to its
+10). Write them as the model does: lower case, no punctuation. pyctcdecode splits a phrase into words and boosts each
+word on its own, everywhere in the text, so boost only words the model misses and avoid one- and two-letter words: a
+boosted "dpr ri" turned other words into "ri". Hotwords need `lm=`; greedy decoding has no beam.
+
 ### Rescoring (optional, off by default)
 
 ```bash

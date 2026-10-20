@@ -85,6 +85,17 @@ def test_lm_fixes_acoustic_confusion(lm_dir):
     assert dec.decode_batch([lp, lp]) == ["saya makan nasi"] * 2
 
 
+def test_hotwords_boost_a_word(lm_dir):
+    # the LM prefers "nasi"; a hotword brings back the acoustically better "masi", in every decode path
+    lp = frames({2: 0.9}, {}, {3: 0.9}, {}, {7: 0.5, 4: 0.45}, {})
+    dec = LMDecoder.from_dir(lm_dir, ToyDecoder(), hotwords=["masi"], hotword_weight=20.0)
+    assert dec.decode(lp) == "saya makan masi"
+    assert dec.decode_batch([lp, lp], workers=2) == ["saya makan masi"] * 2
+    assert dec.decode_words(lp)[0] == "saya makan masi"
+    dec.close()
+    assert LMDecoder.from_dir(lm_dir, ToyDecoder()).decode(lp) == "saya makan nasi"
+
+
 def test_arguments_override_config(lm_dir):
     dec = LMDecoder.from_dir(lm_dir, ToyDecoder(), alpha=0.0, beta=0.0, beam=4)
     assert (dec.alpha, dec.beta, dec.beam) == (0.0, 0.0, 4)
