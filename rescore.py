@@ -68,11 +68,18 @@ class NBestRescorer:
         self.weights, self.topk, self.batch = tuple(weights), topk, batch
 
     def nlm_scores(self, texts: list[str]) -> dict[str, float]:
-        """Log-prob of each distinct text (hypothesis tokens + EOS), batched shortest first."""
+        """Log-prob of each distinct text (hypothesis tokens + EOS), batched shortest first.
+
+        The lm_head runs in micro-batches over the backbone's hidden states: a full
+        [batch, width, vocab] logits tensor is multi-GB at a ~152k vocabulary (Sailor2-1B),
+        while [batch, width, d_model] hidden states are a few MB. Token log-probs come
+        from F.cross_entropy, which skips the materialized fp32 log_softmax table."""
         import torch
+        import torch.nn.functional as F
 
         out, uniq = {}, sorted(set(texts), key=len)
         pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else 0
+        micro = 8
         for s in range(0, len(uniq), self.batch):
             bt = uniq[s:s + self.batch]
             ids = [self.prefix + self.tok(t, add_special_tokens=False)["input_ids"] + [self.tok.eos_token_id] for t in bt]
@@ -84,10 +91,19 @@ class NBestRescorer:
                 mask[j, : len(row)] = 1
             x, mask = x.to(self.device), mask.to(self.device)
             with torch.no_grad():
-                lp = torch.log_softmax(self.lm(input_ids=x, attention_mask=mask).logits.float(), -1)
-            tl = lp[:, :-1].gather(-1, x[:, 1:, None])[..., 0]
-            for j, row in enumerate(ids):
-                out[bt[j]] = float(tl[j, len(self.prefix) - 1: len(row) - 1].sum())
+                hidden = self.lm.model(input_ids=x, attention_mask=mask, use_cache=False,
+                                       return_dict=True).last_hidden_state
+                seq_lp = torch.zeros(len(ids), device=x.device, dtype=torch.float32)
+                for i in range(0, len(ids), micro):
+                    logits = self.lm.lm_head(hidden[i:i + micro, :-1, :]).float()
+                    targets = x[i:i + micro, 1:]
+                    nll = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1),
+                                          reduction="none").view(targets.shape)
+                    for j in range(targets.shape[0]):
+                        row_len = len(ids[i + j])
+                        seq_lp[i + j] = -nll[j, len(self.prefix) - 1: row_len - 1].sum()
+            for j, t in enumerate(bt):
+                out[t] = float(seq_lp[j])
         return out
 
     def pick(self, nbests: list[list[tuple]]) -> list[tuple]:
